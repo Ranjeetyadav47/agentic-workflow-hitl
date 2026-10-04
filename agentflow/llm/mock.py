@@ -37,6 +37,23 @@ _ITEM_C = re.compile(r"^(SKU-\d+)\s{2,}(.+?)\s{2,}([\d.]+)\s{2,}([\d,]+(?:\.\d{1
 _WESTERN = re.compile(r"^\d{1,3}(,\d{3})*(\.\d{1,2})?$")
 _INDIAN = re.compile(r"^\d{1,2}(,\d{2})*,\d{3}(\.\d{1,2})?$")
 
+# The one check that actually clears each rule. A note that says "check it against the PO"
+# on a first-invoice-from-a-new-vendor flag is worse than no note: it sends the reviewer to
+# paperwork that already matches and tells them nothing about the risk that was flagged.
+_CHECKS: dict[str, str] = {
+    "duplicate_invoice": "confirm the earlier ledger entry is the same invoice before closing this one",
+    "vendor_inactive": "confirm with procurement whether this vendor should be trading at all",
+    "extraction_incomplete": "open the original document and key the fields by hand",
+    "first_invoice_from_vendor": "confirm the vendor's onboarding record and bank details against the supplier master",
+    "po_missing": "find out whether a PO was ever raised, or ask the vendor to quote one",
+    "vendor_mismatch": "confirm which entity actually supplied the goods",
+    "quantity_mismatch": "match the flagged lines against the PO and the GRN",
+    "price_variance": "check the flagged lines against the PO price and any agreed revision",
+    "total_vs_lines": "re-add the line items and confirm the stated total",
+    "over_auto_approve_limit": "approve under your own authority or escalate it",
+}
+_FALLBACK_CHECK = "work through the flagged reasons against the PO and the goods receipt"
+
 
 class MockLLM:
     def __init__(self, normalise_indian_numbers: bool = True, fail_first_n_calls: int = 0):
@@ -132,22 +149,33 @@ class MockLLM:
 
     # ---- explanation -------------------------------------------------------
     def _explain(self, context_json: str) -> str:
+        """Action first, then the facts, then the one check that clears the flag.
+
+        A reviewer working a queue reads the first four words and decides whether to open
+        the invoice now or later, so the verb goes at the front and the amount stays near it.
+        """
         try:
             ctx = json.loads(context_json)
         except json.JSONDecodeError:
-            return "Summary unavailable: context was not valid JSON. Recommended action: review manually."
+            return "Review manually: the context for this note was not valid JSON, so none of it can be trusted."
         reasons = ctx.get("reasons") or ["no specific reason recorded"]
         inv = ctx.get("invoice_number") or "unknown invoice"
         vendor = ctx.get("vendor_name") or "unknown vendor"
         amount = ctx.get("total_amount")
-        amount_s = f"{amount:,.2f} {ctx.get('currency') or ''}".strip() if amount is not None else "unknown amount"
+        amount_s = f"{amount:,.2f} {ctx.get('currency') or ''}".strip() if amount is not None else "an unknown amount"
         decision = ctx.get("decision", "needs_human")
-        action = {
-            "needs_human": "Check the flagged items against the PO and goods receipt, then approve or reject.",
-            "reject": "Confirm the rejection reason with the vendor before closing.",
-            "auto_approve": "No action needed.",
-        }.get(decision, "Review manually.")
-        return f"{inv} from {vendor} for {amount_s} was routed for review because: {'; '.join(reasons)}. {action}"
+
+        # The rules fire in policy order, so the first one is the rule that set the decision
+        # and therefore the one whose check the reviewer should do first.
+        fired = ctx.get("fired_rules") or []
+        check = next((_CHECKS[r] for r in fired if r in _CHECKS), _FALLBACK_CHECK)
+        why = "; ".join(reasons)
+
+        if decision == "auto_approve":
+            return f"No action needed on {inv} — {vendor}, {amount_s}. Auto-approved: {why}."
+        if decision == "reject":
+            return f"Rejected {inv} — {vendor}, {amount_s}. Reason: {why}. Before closing: {check}."
+        return f"Review {inv} — {vendor}, {amount_s}. Held because: {why}. Before approving: {check}."
 
 
 # ---- helpers -----------------------------------------------------------------

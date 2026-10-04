@@ -9,7 +9,7 @@ reviewer sees the full picture.
 from __future__ import annotations
 
 from ..config import PolicyConfig
-from ..models import Decision, ExtractedInvoice, MatchResult, PolicyOutcome
+from ..models import RULE_FIRED, RULE_PASSED, Decision, ExtractedInvoice, MatchResult, PolicyOutcome
 
 
 class PolicyAgent:
@@ -25,7 +25,7 @@ class PolicyAgent:
 
         def fire(rule: str, fired: bool, outcome: Decision, reason: str) -> None:
             nonlocal decision
-            trace.append(f"{rule}: {'FIRED' if fired else 'pass'}")
+            trace.append(f"{rule}: {RULE_FIRED if fired else RULE_PASSED}")
             if fired:
                 reasons.append(reason)
                 if decision is None:
