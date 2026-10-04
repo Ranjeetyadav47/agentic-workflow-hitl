@@ -1,0 +1,62 @@
+[
+  {
+    "vendor_id": "V001",
+    "name": "Meridian Chemicals Pvt Ltd",
+    "active": true
+  },
+  {
+    "vendor_id": "V002",
+    "name": "Nova Packaging Ltd",
+    "active": true
+  },
+  {
+    "vendor_id": "V003",
+    "name": "Arjun Logistics",
+    "active": true
+  },
+  {
+    "vendor_id": "V004",
+    "name": "Kestrel Instruments",
+    "active": true
+  },
+  {
+    "vendor_id": "V005",
+    "name": "Saffron Agro Supplies",
+    "active": true
+  },
+  {
+    "vendor_id": "V006",
+    "name": "Blue Lotus Engineering",
+    "active": true
+  },
+  {
+    "vendor_id": "V007",
+    "name": "Orion Lab Consumables",
+    "active": true
+  },
+  {
+    "vendor_id": "V008",
+    "name": "Tulsi Transport Co",
+    "active": true
+  },
+  {
+    "vendor_id": "V009",
+    "name": "Harbour Steel Works",
+    "active": false
+  },
+  {
+    "vendor_id": "V010",
+    "name": "Pinnacle Office Systems",
+    "active": true
+  },
+  {
+    "vendor_id": "V011",
+    "name": "Greenfield Seeds Ltd",
+    "active": true
+  },
+  {
+    "vendor_id": "V012",
+    "name": "Vector Safety Gear",
+    "active": false
+  }
+]
