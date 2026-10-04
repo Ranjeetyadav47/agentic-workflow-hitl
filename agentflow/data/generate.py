@@ -13,6 +13,8 @@ import random
 from dataclasses import dataclass
 from typing import Iterator
 
+from ..config import PolicyConfig
+
 # scenario -> expected decision
 SCENARIOS: dict[str, str] = {
     "clean": "auto_approve",
@@ -64,7 +66,21 @@ CATALOGUE = [
     ("SKU-939", "Steel bracket 40mm", 160.00), ("SKU-940", "Seed tray 104-cell", 48.00),
 ]
 
-AUTO_APPROVE_LIMIT = 250_000.0   # must match PolicyConfig in the eval; kept here for scenario design
+# Scenario design reads the real policy thresholds rather than copying them: a scenario
+# labelled auto_approve must stay under the limit the policy agent actually enforces, and
+# a duplicated constant is a mislabelled test set waiting to happen.
+AUTO_APPROVE_LIMIT = PolicyConfig().auto_approve_limit
+PRICE_TOLERANCE_PCT = PolicyConfig().price_tolerance_pct
+
+# Template C renders totals with Indian digit grouping, and the parser bug it exposes only
+# shows up at a lakh or more. If the authority limit ever drops below this, template C can
+# no longer carry the bug, so fail loudly instead of quietly generating a weaker test set.
+LAKH = 100_000.0
+if AUTO_APPROVE_LIMIT * 0.95 <= LAKH * 1.1:
+    raise ValueError(
+        f"auto_approve_limit {AUTO_APPROVE_LIMIT:,.0f} is too low for the template C "
+        f"lakh-format scenario; raise it above {LAKH * 1.1 / 0.95:,.0f} or redesign template C"
+    )
 
 
 @dataclass
@@ -184,11 +200,16 @@ def _make_invoice(ctx: _Ctx, scenario: str) -> dict:
         s, d, q, p = inv_lines[0]
         received[s] = max(0, q - rng.randint(1, max(1, int(q // 2))))
     elif scenario == "price_variance":
+        # Well clear of the tolerance, so the label holds at any configured tolerance.
         s, d, q, p = inv_lines[0]
-        inv_lines[0] = (s, d, q, round(p * (1 + rng.uniform(0.04, 0.12)), 2))
+        over = rng.uniform(PRICE_TOLERANCE_PCT * 2, PRICE_TOLERANCE_PCT * 8) / 100.0
+        inv_lines[0] = (s, d, q, round(p * (1 + over), 2))
     elif scenario == "price_within_tolerance":
+        # Deliberately inside the tolerance band, never on its edge: these are labelled
+        # auto_approve, so a rounding slip here would silently mislabel the test set.
         s, d, q, p = inv_lines[0]
-        inv_lines[0] = (s, d, q, round(p * (1 + rng.uniform(0.005, 0.018)), 2))
+        under = rng.uniform(PRICE_TOLERANCE_PCT * 0.1, PRICE_TOLERANCE_PCT * 0.8) / 100.0
+        inv_lines[0] = (s, d, q, round(p * (1 + under), 2))
     elif scenario == "missing_po":
         inv_po = f"PO-{rng.randint(9000, 9999)}"
     elif scenario == "vendor_mismatch":

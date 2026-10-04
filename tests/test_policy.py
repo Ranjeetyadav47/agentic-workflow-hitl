@@ -22,7 +22,9 @@ def _match(**kw):
 
 class PolicyTests(unittest.TestCase):
     def setUp(self):
-        self.agent = PolicyAgent(PolicyConfig(auto_approve_limit=250_000.0, price_tolerance_pct=2.0))
+        # Test the thresholds we actually ship, so these tests document the real policy.
+        self.cfg = PolicyConfig()
+        self.agent = PolicyAgent(self.cfg)
 
     def test_clean_invoice_auto_approves(self):
         out = self.agent.run(_inv(), _match())
@@ -46,12 +48,21 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(self.agent.run(_inv(), _match(po_found=False)).decision, Decision.NEEDS_HUMAN)
 
     def test_price_variance_boundary(self):
-        self.assertEqual(self.agent.run(_inv(), _match(max_price_variance_pct=2.0)).decision, Decision.AUTO_APPROVE)
-        self.assertEqual(self.agent.run(_inv(), _match(max_price_variance_pct=2.01)).decision, Decision.NEEDS_HUMAN)
+        tol = self.cfg.price_tolerance_pct
+        self.assertEqual(self.agent.run(_inv(), _match(max_price_variance_pct=tol)).decision, Decision.AUTO_APPROVE)
+        self.assertEqual(self.agent.run(_inv(), _match(max_price_variance_pct=tol + 0.01)).decision,
+                         Decision.NEEDS_HUMAN)
 
     def test_authority_limit_boundary(self):
-        self.assertEqual(self.agent.run(_inv(total=250_000.0), _match()).decision, Decision.AUTO_APPROVE)
-        self.assertEqual(self.agent.run(_inv(total=250_000.01), _match()).decision, Decision.NEEDS_HUMAN)
+        limit = self.cfg.auto_approve_limit
+        self.assertEqual(self.agent.run(_inv(total=limit), _match()).decision, Decision.AUTO_APPROVE)
+        self.assertEqual(self.agent.run(_inv(total=limit + 0.01), _match()).decision, Decision.NEEDS_HUMAN)
+
+    def test_generator_thresholds_track_the_policy(self):
+        """The labelled set is only ground truth if it was built against the shipped thresholds."""
+        from agentflow.data.generate import AUTO_APPROVE_LIMIT, PRICE_TOLERANCE_PCT
+        self.assertEqual(AUTO_APPROVE_LIMIT, self.cfg.auto_approve_limit)
+        self.assertEqual(PRICE_TOLERANCE_PCT, self.cfg.price_tolerance_pct)
 
     def test_first_invoice_from_vendor_goes_to_human(self):
         """Clean paperwork is not enough on its own if we have never paid this vendor."""
