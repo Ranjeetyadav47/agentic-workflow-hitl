@@ -71,6 +71,7 @@ class MatchResult:
     received_total: Optional[float]
     po_total: Optional[float]
     duplicate_of: Optional[str]
+    vendor_prior_invoices: Optional[int] = None   # None = vendor on the invoice could not be identified
     notes: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:

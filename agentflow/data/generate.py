@@ -23,13 +23,14 @@ SCENARIOS: dict[str, str] = {
     "missing_po": "needs_human",
     "vendor_mismatch": "needs_human",
     "garbled": "needs_human",
+    "new_vendor": "needs_human",
     "vendor_inactive": "reject",
     "duplicate": "reject",
 }
 
 # How many of each in the default 120-invoice set.
 MIX: dict[str, int] = {
-    "clean": 40,
+    "clean": 32,
     "price_within_tolerance": 10,
     "over_limit": 10,
     "price_variance": 10,
@@ -37,6 +38,7 @@ MIX: dict[str, int] = {
     "missing_po": 8,
     "vendor_mismatch": 8,
     "garbled": 6,
+    "new_vendor": 8,
     "vendor_inactive": 8,
     "duplicate": 8,
 }
@@ -45,8 +47,12 @@ VENDOR_NAMES = [
     "Meridian Chemicals Pvt Ltd", "Nova Packaging Ltd", "Arjun Logistics", "Kestrel Instruments",
     "Saffron Agro Supplies", "Blue Lotus Engineering", "Orion Lab Consumables", "Tulsi Transport Co",
     "Harbour Steel Works", "Pinnacle Office Systems", "Greenfield Seeds Ltd", "Vector Safety Gear",
+    "Indigo Valve Works", "Marigold Agritech Pvt Ltd",
 ]
 INACTIVE_VENDORS = {"Harbour Steel Works", "Vector Safety Gear"}
+# Onboarded but never paid: these are the only vendors the new_vendor scenario draws from,
+# so "first invoice from this vendor" stays a labelled scenario rather than a surprise.
+NEW_VENDORS = {"Indigo Valve Works", "Marigold Agritech Pvt Ltd"}
 
 CATALOGUE = [
     ("SKU-114", "Sodium Hypochlorite 12%", 1250.00), ("SKU-209", "Drum 200L HDPE", 850.00),
@@ -78,7 +84,12 @@ def generate(out_dir: str = "data", seed: int = 42, mix: dict[str, int] | None =
     ctx = _Ctx(rng=rng, vendors=[], pos=[], receipts=[], invoices=[])
 
     for i, name in enumerate(VENDOR_NAMES):
-        ctx.vendors.append({"vendor_id": f"V{i+1:03d}", "name": name, "active": name not in INACTIVE_VENDORS})
+        ctx.vendors.append({
+            "vendor_id": f"V{i+1:03d}",
+            "name": name,
+            "active": name not in INACTIVE_VENDORS,
+            "prior_invoices": 0 if name in NEW_VENDORS else rng.randint(6, 180),
+        })
 
     # Order matters for duplicates: originals first. Shuffle the rest for realism.
     order: list[str] = []
@@ -134,9 +145,17 @@ def load_invoices(data_dir: str = "data") -> Iterator[dict]:
 # ---- scenario construction ----------------------------------------------------------
 def _make_invoice(ctx: _Ctx, scenario: str) -> dict:
     rng = ctx.rng
-    active = [v for v in ctx.vendors if v["active"]]
+    # "Established" excludes the never-paid vendors so only the new_vendor scenario can draw them.
+    established = [v for v in ctx.vendors if v["active"] and v["prior_invoices"] > 0]
     inactive = [v for v in ctx.vendors if not v["active"]]
-    vendor = rng.choice(inactive) if scenario == "vendor_inactive" else rng.choice(active)
+    brand_new = [v for v in ctx.vendors if v["active"] and v["prior_invoices"] == 0]
+    active = established
+    if scenario == "vendor_inactive":
+        vendor = rng.choice(inactive)
+    elif scenario == "new_vendor":
+        vendor = rng.choice(brand_new)
+    else:
+        vendor = rng.choice(established)
 
     # Template C uses Indian digit grouping; make a third of clean invoices land in
     # [1 lakh, limit) so the grouping bug is observable in the eval.
