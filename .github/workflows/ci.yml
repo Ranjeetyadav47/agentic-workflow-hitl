@@ -1,0 +1,36 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Unit tests (no third-party dependencies)
+        run: PYTHONPATH=.:tests python -m unittest discover -s tests -v
+      - name: Smoke test the CLI end to end
+        run: |
+          python -m agentflow --quiet generate-data --out /tmp/data
+          python -m agentflow --quiet --data-dir /tmp/data --db /tmp/smoke.db run --all > /tmp/runs.jsonl
+          python -m agentflow --quiet --data-dir /tmp/data --db /tmp/smoke.db stats
+      - name: Evaluation (must stay at 100% on the labelled set, 0 false auto-approvals)
+        run: |
+          python -m agentflow --quiet --data-dir /tmp/data eval --compare --out /tmp/eval_report.md
+          python - <<'PY'
+          from agentflow.eval import run_eval
+          r = run_eval("/tmp/data")
+          assert r.accuracy == 1.0 and r.false_auto_approvals == 0, (r.accuracy, r.false_auto_approvals)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eval-report-py${{ matrix.python-version }}
+          path: /tmp/eval_report.md
