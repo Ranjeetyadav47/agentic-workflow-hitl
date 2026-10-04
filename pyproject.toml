@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentflow-hitl"
+version = "0.1.0"
+description = "Multi-agent invoice-approval workflow with human-in-the-loop review, retries, dead-letter queue, audit trail and an evaluation harness. Standard library only."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Ranjeet Yadav" }]
+keywords = ["agents", "llm", "workflow", "human-in-the-loop", "evaluation", "accounts-payable"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Office/Business :: Financial :: Accounting",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+agentflow = "agentflow.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["agentflow*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "tests"]
