@@ -1,5 +1,7 @@
 # agentic-workflow-hitl
 
+![ci](https://github.com/Ranjeetyadav47/agentic-workflow-hitl/actions/workflows/ci.yml/badge.svg)
+
 A multi-agent invoice-approval workflow built the way production systems need to be built: LLMs read and explain, deterministic code decides, humans approve the ambiguous cases, and every step is audited.
 
 - **Human-in-the-loop** review queue with resume: approve or reject from the CLI, the run continues.
