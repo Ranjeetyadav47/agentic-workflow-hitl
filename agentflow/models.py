@@ -71,10 +71,15 @@ class MatchResult:
     received_total: Optional[float]
     po_total: Optional[float]
     duplicate_of: Optional[str]
+    vendor_prior_invoices: Optional[int] = None   # None = vendor on the invoice could not be identified
     notes: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+RULE_FIRED = "FIRED"        # trace marker; `fired_rules` depends on it, so keep them together
+RULE_PASSED = "pass"
 
 
 @dataclass
@@ -82,6 +87,10 @@ class PolicyOutcome:
     decision: Decision
     reasons: list[str]
     rule_trace: list[str]          # every rule evaluated, in order, with its result
+
+    def fired_rules(self) -> list[str]:
+        """Names of the rules that fired, in policy order. The first one set the decision."""
+        return [t.split(":", 1)[0] for t in self.rule_trace if t.endswith(f": {RULE_FIRED}")]
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)

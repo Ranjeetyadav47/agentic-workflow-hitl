@@ -13,6 +13,8 @@ import random
 from dataclasses import dataclass
 from typing import Iterator
 
+from ..config import PolicyConfig
+
 # scenario -> expected decision
 SCENARIOS: dict[str, str] = {
     "clean": "auto_approve",
@@ -23,13 +25,14 @@ SCENARIOS: dict[str, str] = {
     "missing_po": "needs_human",
     "vendor_mismatch": "needs_human",
     "garbled": "needs_human",
+    "new_vendor": "needs_human",
     "vendor_inactive": "reject",
     "duplicate": "reject",
 }
 
 # How many of each in the default 120-invoice set.
 MIX: dict[str, int] = {
-    "clean": 40,
+    "clean": 32,
     "price_within_tolerance": 10,
     "over_limit": 10,
     "price_variance": 10,
@@ -37,6 +40,7 @@ MIX: dict[str, int] = {
     "missing_po": 8,
     "vendor_mismatch": 8,
     "garbled": 6,
+    "new_vendor": 8,
     "vendor_inactive": 8,
     "duplicate": 8,
 }
@@ -45,8 +49,12 @@ VENDOR_NAMES = [
     "Meridian Chemicals Pvt Ltd", "Nova Packaging Ltd", "Arjun Logistics", "Kestrel Instruments",
     "Saffron Agro Supplies", "Blue Lotus Engineering", "Orion Lab Consumables", "Tulsi Transport Co",
     "Harbour Steel Works", "Pinnacle Office Systems", "Greenfield Seeds Ltd", "Vector Safety Gear",
+    "Indigo Valve Works", "Marigold Agritech Pvt Ltd",
 ]
 INACTIVE_VENDORS = {"Harbour Steel Works", "Vector Safety Gear"}
+# Onboarded but never paid: these are the only vendors the new_vendor scenario draws from,
+# so "first invoice from this vendor" stays a labelled scenario rather than a surprise.
+NEW_VENDORS = {"Indigo Valve Works", "Marigold Agritech Pvt Ltd"}
 
 CATALOGUE = [
     ("SKU-114", "Sodium Hypochlorite 12%", 1250.00), ("SKU-209", "Drum 200L HDPE", 850.00),
@@ -58,7 +66,21 @@ CATALOGUE = [
     ("SKU-939", "Steel bracket 40mm", 160.00), ("SKU-940", "Seed tray 104-cell", 48.00),
 ]
 
-AUTO_APPROVE_LIMIT = 250_000.0   # must match PolicyConfig in the eval; kept here for scenario design
+# Scenario design reads the real policy thresholds rather than copying them: a scenario
+# labelled auto_approve must stay under the limit the policy agent actually enforces, and
+# a duplicated constant is a mislabelled test set waiting to happen.
+AUTO_APPROVE_LIMIT = PolicyConfig().auto_approve_limit
+PRICE_TOLERANCE_PCT = PolicyConfig().price_tolerance_pct
+
+# Template C renders totals with Indian digit grouping, and the parser bug it exposes only
+# shows up at a lakh or more. If the authority limit ever drops below this, template C can
+# no longer carry the bug, so fail loudly instead of quietly generating a weaker test set.
+LAKH = 100_000.0
+if AUTO_APPROVE_LIMIT * 0.95 <= LAKH * 1.1:
+    raise ValueError(
+        f"auto_approve_limit {AUTO_APPROVE_LIMIT:,.0f} is too low for the template C "
+        f"lakh-format scenario; raise it above {LAKH * 1.1 / 0.95:,.0f} or redesign template C"
+    )
 
 
 @dataclass
@@ -78,7 +100,12 @@ def generate(out_dir: str = "data", seed: int = 42, mix: dict[str, int] | None =
     ctx = _Ctx(rng=rng, vendors=[], pos=[], receipts=[], invoices=[])
 
     for i, name in enumerate(VENDOR_NAMES):
-        ctx.vendors.append({"vendor_id": f"V{i+1:03d}", "name": name, "active": name not in INACTIVE_VENDORS})
+        ctx.vendors.append({
+            "vendor_id": f"V{i+1:03d}",
+            "name": name,
+            "active": name not in INACTIVE_VENDORS,
+            "prior_invoices": 0 if name in NEW_VENDORS else rng.randint(6, 180),
+        })
 
     # Order matters for duplicates: originals first. Shuffle the rest for realism.
     order: list[str] = []
@@ -134,9 +161,17 @@ def load_invoices(data_dir: str = "data") -> Iterator[dict]:
 # ---- scenario construction ----------------------------------------------------------
 def _make_invoice(ctx: _Ctx, scenario: str) -> dict:
     rng = ctx.rng
-    active = [v for v in ctx.vendors if v["active"]]
+    # "Established" excludes the never-paid vendors so only the new_vendor scenario can draw them.
+    established = [v for v in ctx.vendors if v["active"] and v["prior_invoices"] > 0]
     inactive = [v for v in ctx.vendors if not v["active"]]
-    vendor = rng.choice(inactive) if scenario == "vendor_inactive" else rng.choice(active)
+    brand_new = [v for v in ctx.vendors if v["active"] and v["prior_invoices"] == 0]
+    active = established
+    if scenario == "vendor_inactive":
+        vendor = rng.choice(inactive)
+    elif scenario == "new_vendor":
+        vendor = rng.choice(brand_new)
+    else:
+        vendor = rng.choice(established)
 
     # Template C uses Indian digit grouping; make a third of clean invoices land in
     # [1 lakh, limit) so the grouping bug is observable in the eval.
@@ -165,11 +200,16 @@ def _make_invoice(ctx: _Ctx, scenario: str) -> dict:
         s, d, q, p = inv_lines[0]
         received[s] = max(0, q - rng.randint(1, max(1, int(q // 2))))
     elif scenario == "price_variance":
+        # Well clear of the tolerance, so the label holds at any configured tolerance.
         s, d, q, p = inv_lines[0]
-        inv_lines[0] = (s, d, q, round(p * (1 + rng.uniform(0.04, 0.12)), 2))
+        over = rng.uniform(PRICE_TOLERANCE_PCT * 2, PRICE_TOLERANCE_PCT * 8) / 100.0
+        inv_lines[0] = (s, d, q, round(p * (1 + over), 2))
     elif scenario == "price_within_tolerance":
+        # Deliberately inside the tolerance band, never on its edge: these are labelled
+        # auto_approve, so a rounding slip here would silently mislabel the test set.
         s, d, q, p = inv_lines[0]
-        inv_lines[0] = (s, d, q, round(p * (1 + rng.uniform(0.005, 0.018)), 2))
+        under = rng.uniform(PRICE_TOLERANCE_PCT * 0.1, PRICE_TOLERANCE_PCT * 0.8) / 100.0
+        inv_lines[0] = (s, d, q, round(p * (1 + under), 2))
     elif scenario == "missing_po":
         inv_po = f"PO-{rng.randint(9000, 9999)}"
     elif scenario == "vendor_mismatch":

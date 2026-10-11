@@ -13,9 +13,17 @@ from ..llm.base import LLMClient, LLMResponse
 from ..models import ExtractedInvoice, MatchResult, PolicyOutcome, ReviewerNote
 
 SYSTEM = (
-    "You write one-paragraph notes for an accounts-payable reviewer. Use only the facts in CONTEXT. "
-    "State the invoice, vendor, amount, why it was routed, and the recommended next action. "
-    "Do not invent numbers. Do not recommend approval or rejection beyond what the reasons support."
+    "You write one-paragraph notes for an accounts-payable reviewer working a queue. They read the "
+    "first few words and decide whether to open the invoice now or later, so lead with the action.\n"
+    "Write exactly one paragraph in three parts, in this order:\n"
+    "1. The action and the identity: 'Review INV-1234 - Vendor Name, 12,345.00 INR.' Use 'Rejected' "
+    "instead of 'Review' when the decision is reject.\n"
+    "2. Why it was held: 'Held because: <the reasons, verbatim>.' Use 'Reason:' when the decision is reject.\n"
+    "3. The single check that clears the first fired rule: 'Before approving: <check>.' Use 'Before closing:' "
+    "when the decision is reject. FIRED_RULES is in policy order, so the first entry set the decision; "
+    "name the check that addresses that rule specifically, not a generic instruction to compare against the PO.\n"
+    "Use only the facts in CONTEXT. Do not invent numbers, vendors or reasons. Do not recommend approval or "
+    "rejection beyond what the reasons support. No greeting, no sign-off, no bullet points."
 )
 
 
@@ -33,6 +41,9 @@ class ExplainAgent:
             "currency": inv.currency,
             "decision": policy.decision.value,
             "reasons": policy.reasons,
+            # Rule names in policy order: the first one set the decision, so it decides which
+            # check the note tells the reviewer to do first.
+            "fired_rules": policy.fired_rules(),
             "match_notes": match.notes,
         }
         resp = self.llm.complete(task="explain", system=SYSTEM, user="CONTEXT:\n" + json.dumps(context))

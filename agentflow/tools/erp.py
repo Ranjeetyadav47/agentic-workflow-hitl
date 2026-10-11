@@ -17,6 +17,7 @@ class Vendor:
     vendor_id: str
     name: str
     active: bool
+    prior_invoices: int = 0     # invoices already settled with this vendor; 0 = never traded with
 
 
 @dataclass(frozen=True)
@@ -55,7 +56,9 @@ class ERP:
     def _load(self, data_dir: str) -> None:
         with open(os.path.join(data_dir, "vendors.json")) as f:
             for v in json.load(f):
-                vendor = Vendor(v["vendor_id"], v["name"], bool(v["active"]))
+                # Missing prior_invoices means we cannot prove a trading history, so it reads
+                # as 0 and the policy agent routes the invoice to a human. Fail safe, not open.
+                vendor = Vendor(v["vendor_id"], v["name"], bool(v["active"]), int(v.get("prior_invoices", 0)))
                 self.vendors[vendor.vendor_id] = vendor
                 self.vendors_by_name[_norm(vendor.name)] = vendor
         with open(os.path.join(data_dir, "purchase_orders.json")) as f:

@@ -35,11 +35,33 @@ flowchart LR
 
 Two places use an LLM: reading unstructured invoice text, and writing the note a reviewer sees. Neither one makes a decision. The policy agent is ordinary code with an ordered rule list, and its output includes every rule evaluated and whether it fired, which is what an auditor asks for.
 
+## Policy rules
+
+Evaluated top to bottom. The first rule that fires sets the decision; the rest are still evaluated and logged, so the reviewer sees every reason at once rather than only the first one.
+
+| # | Rule | Fires when | Outcome |
+| --- | --- | --- | --- |
+| 1 | `duplicate_invoice` | vendor + invoice number already posted to the ledger | **reject** |
+| 2 | `vendor_inactive` | the PO's vendor is flagged inactive in the ERP | **reject** |
+| 3 | `extraction_incomplete` | no total, no invoice number, or confidence < 0.5 | needs human |
+| 4 | `first_invoice_from_vendor` | the vendor named on the invoice has no settled invoices on record | needs human |
+| 5 | `po_missing` | no purchase order matches the quoted PO number | needs human |
+| 6 | `vendor_mismatch` | the invoice vendor is not the PO vendor | needs human |
+| 7 | `quantity_mismatch` | invoiced quantity exceeds goods received, or a SKU is not on the PO | needs human |
+| 8 | `price_variance` | unit price is more than `price_tolerance_pct` above the PO | needs human |
+| 9 | `total_vs_lines` | the stated total does not equal the sum of line items | needs human |
+| 10 | `over_auto_approve_limit` | total exceeds `auto_approve_limit` | needs human |
+| — | default | nothing fired | auto-approve |
+
+**Thresholds** (`PolicyConfig` in [`agentflow/config.py`](agentflow/config.py)): `auto_approve_limit` is **150,000 INR** and `price_tolerance_pct` is **1.5%**. Both are deliberately tight. A review costs a few minutes of an AP clerk's time; a wrong auto-approval costs the invoice, and recovering it costs a great deal more than the review would have. The eval quantifies that trade-off rather than assuming it: at these thresholds the human review rate is 51.7%, and the "what I would do next" list below treats bringing that down — without giving up the zero false auto-approvals — as the actual optimisation problem. The seeded generator reads both numbers from `PolicyConfig` instead of copying them, so a threshold change cannot silently mislabel the test set; a test asserts they stay in step.
+
+Rule 4 is the one the three-way match cannot replace. A first invoice from a newly onboarded vendor can be perfectly consistent — matching PO, matching receipt, correct prices — and still be the classic invoice-fraud setup, so it gets a human look regardless of how clean the paperwork is. Vendor history is an ERP fact (`prior_invoices`), not an inference, and a vendor record with no history field reads as zero: unknown counterparties fail toward review, not toward payment.
+
 ## Quickstart
 
 ```bash
 git clone https://github.com/Ranjeetyadav47/agentic-workflow-hitl && cd agentic-workflow-hitl
-python -m agentflow generate-data            # 120 labelled invoices, 12 vendors, POs, receipts
+python -m agentflow generate-data            # 120 labelled invoices, 14 vendors, POs, receipts
 python -m agentflow run --all                # process everything; JSON logs on stderr, results on stdout
 python -m agentflow review list              # what is waiting for a human
 python -m agentflow review approve <RUN_ID> --note "checked GRN"
@@ -52,26 +74,28 @@ Python 3.10+. Tests: `PYTHONPATH=.:tests python -m unittest discover -s tests` (
 ## What a run looks like
 
 ```
-$ python -m agentflow show 3052fc19…
-run 3052fc19…  invoice inv-0002  status=approved  decision=needs_human
+$ python -m agentflow show 1193648f…
+run 1193648f…  invoice inv-0005  status=awaiting_review  decision=needs_human
 rule trace:
   duplicate_invoice: pass
   vendor_inactive: pass
   extraction_incomplete: pass
-  po_missing: FIRED
+  first_invoice_from_vendor: FIRED
+  po_missing: pass
   vendor_mismatch: pass
   quantity_mismatch: pass
   price_variance: pass
   total_vs_lines: pass
   over_auto_approve_limit: pass
-reviewer note: INV-2002 from Saffron Agro Supplies for 13,395.00 INR was routed for review because: no matching purchase order. Check the flagged items against the PO and goods receipt, then approve or reject.
+reviewer note: Review INV-2005 — Indigo Valve Works, 29,520.00 INR. Held because: first invoice from this vendor: no settled history on record. Before approving: confirm the vendor's onboarding record and bank details against the supplier master.
 steps:
-  intake   attempt=1 ok    0.12ms  tokens=168+70
-  match    attempt=1 ok    0.04ms  tokens=0+0
-  policy   attempt=1 ok    0.05ms  tokens=0+0
-  explain  attempt=1 ok    0.06ms  tokens=131+48
-  execute  attempt=1 ok    0.28ms  tokens=0+0
+  intake   attempt=1 ok    0.15ms  tokens=181+94
+  match    attempt=1 ok    0.09ms  tokens=0+0
+  policy   attempt=1 ok    0.07ms  tokens=0+0
+  explain  attempt=1 ok    0.10ms  tokens=334+57
 ```
+
+The run stops there: `awaiting_review`, no `execute` step, nothing posted. Every rule is listed whether it fired or not, so the reviewer can see what *was* checked and found clean, not just what failed. The note names the one check that clears the rule that fired — a new-vendor flag sends the reviewer to the supplier master, not to a PO that already matches.
 
 Logs are one JSON object per line with `run_id` on every line, so they drop straight into Cloud Logging, Datadog or `jq`.
 
@@ -81,18 +105,18 @@ Logs are one JSON object per line with `run_id` on every line, so they drop stra
 
 | Metric | before fix | after fix |
 | --- | --- | --- |
-| Decision accuracy | 80.8% | 100.0% |
+| Decision accuracy | 81.7% | 100.0% |
 | False auto-approvals (paid without review, wrongly) | 0 | 0 |
 | Missed rejects | 4 | 0 |
-| Human review rate | 64.2% | 45.0% |
+| Human review rate | 70.0% | 51.7% |
 | Dead-lettered runs | 0 | 0 |
-| Projected LLM cost per 1,000 invoices | ~$0.12 | ~$0.11 |
+| Projected LLM cost per 1,000 invoices | $0.144 | $0.133 |
 
-**The bug the harness caught.** Indian invoices group digits in lakhs (`1,14,000.00`). The amount parser accepted Western grouping only, and on a lakh-format total it did not fail: it silently matched the suffix `14,000.00` and returned a plausible wrong number. The invoice total then disagreed with its own line items, so 19 clean invoices went to a human instead of auto-approving. Worse, four duplicates of those invoices were missed, because duplicate detection checks the ledger and the originals had never been posted. One bug, two symptoms, one of them two steps downstream. Reproduce it with `--no-indian-numbers`; the fix is `MockLLM._parse_amount`.
+**The bug the harness caught.** Indian invoices group digits in lakhs (`1,14,000.00`). The amount parser accepted Western grouping only, and on a lakh-format total it did not fail: it silently matched the suffix `14,000.00` and returned a plausible wrong number. The invoice total then disagreed with its own line items, so 18 invoices that should have auto-approved went to a human instead. Worse, four duplicates of those invoices were missed, because duplicate detection checks the ledger and the originals had never been posted. One bug, two symptoms, one of them two steps downstream. Reproduce it with `--no-indian-numbers`; the fix is `MockLLM._parse_amount`.
 
 **What 100% means and does not mean.** The mock reads the three invoice layouts it was written for, so the after-fix score says the *workflow logic* is correct against ground truth: hard stops before soft checks, unreadable input routed to a human rather than dropped, duplicates caught, nothing auto-approved that should not be. It says nothing about extraction quality on real scans; in live mode that is the number to watch, and the harness is built so you can watch it: swap the LLM, re-run, read the failure table.
 
-**The metric that matters.** Accuracy is the headline; *false auto-approvals* is the one with money attached. The before-fix system was wrong 19% of the time and still had zero of them, because the parser's failure mode made the system more cautious, not less. That is the failure mode you want, and the eval asserts it in CI.
+**The metric that matters.** Accuracy is the headline; *false auto-approvals* is the one with money attached. The before-fix system was wrong 18.3% of the time and still had zero of them, because the parser's failure mode made the system more cautious, not less. That is the failure mode you want, and the eval asserts it in CI.
 
 ## Human in the loop
 
@@ -157,7 +181,7 @@ agentflow/
   eval/harness.py      metrics, confusion matrix, failure analysis, markdown report
   data/generate.py     seeded synthetic data with ground-truth labels per scenario
   __main__.py          CLI
-tests/                 29 tests: extraction, policy boundaries, HITL resume, retries, DLQ, replay, eval
+tests/                 44 tests: extraction, policy boundaries, reviewer notes, HITL resume, retries, DLQ, replay, eval
 reports/eval_report.md generated by `eval --compare`
 ```
 

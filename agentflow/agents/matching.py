@@ -24,6 +24,12 @@ class MatchAgent:
         po = self.erp.get_po(inv.po_number)
         vendor_by_name = self.erp.find_vendor_by_name(inv.vendor_name)
 
+        # History of the vendor *named on the invoice*, not the PO's vendor: the question the
+        # policy agent asks is "have we ever paid this counterparty before?".
+        prior = vendor_by_name.prior_invoices if vendor_by_name else None
+        if prior == 0:
+            notes.append(f"no settled invoices on record for {inv.vendor_name!r}")
+
         duplicate_of = None
         if inv.vendor_name and inv.invoice_number:
             duplicate_of = self.store.find_ledger_duplicate(inv.vendor_name, inv.invoice_number)
@@ -41,6 +47,7 @@ class MatchAgent:
                 received_total=None,
                 po_total=None,
                 duplicate_of=duplicate_of,
+                vendor_prior_invoices=prior,
                 notes=notes,
             )
 
@@ -90,5 +97,6 @@ class MatchAgent:
             received_total=round(received_total, 2),
             po_total=po.total,
             duplicate_of=duplicate_of,
+            vendor_prior_invoices=prior,
             notes=notes,
         )

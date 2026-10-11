@@ -9,7 +9,7 @@ reviewer sees the full picture.
 from __future__ import annotations
 
 from ..config import PolicyConfig
-from ..models import Decision, ExtractedInvoice, MatchResult, PolicyOutcome
+from ..models import RULE_FIRED, RULE_PASSED, Decision, ExtractedInvoice, MatchResult, PolicyOutcome
 
 
 class PolicyAgent:
@@ -25,7 +25,7 @@ class PolicyAgent:
 
         def fire(rule: str, fired: bool, outcome: Decision, reason: str) -> None:
             nonlocal decision
-            trace.append(f"{rule}: {'FIRED' if fired else 'pass'}")
+            trace.append(f"{rule}: {RULE_FIRED if fired else RULE_PASSED}")
             if fired:
                 reasons.append(reason)
                 if decision is None:
@@ -41,7 +41,14 @@ class PolicyAgent:
         fire("extraction_incomplete", unparseable, Decision.NEEDS_HUMAN,
              "invoice could not be read reliably: " + ", ".join(inv.issues or ["low confidence"]))
 
-        # 3. Three-way match.
+        # 3. Counterparty: a vendor we have never paid before gets a human look, however
+        # clean the paperwork is. A clean first invoice is exactly what an invoice-fraud
+        # attempt looks like, and the three-way match cannot see it.
+        first_invoice = match.vendor_prior_invoices == 0
+        fire("first_invoice_from_vendor", first_invoice, Decision.NEEDS_HUMAN,
+             "first invoice from this vendor: no settled history on record")
+
+        # 4. Three-way match.
         fire("po_missing", not match.po_found, Decision.NEEDS_HUMAN, "no matching purchase order")
         fire("vendor_mismatch", match.po_found and match.vendor_matches_po is False, Decision.NEEDS_HUMAN,
              "invoice vendor differs from PO vendor")
@@ -53,7 +60,7 @@ class PolicyAgent:
         line_mismatch = any(i.startswith("line_sum_mismatch") for i in inv.issues)
         fire("total_vs_lines", line_mismatch, Decision.NEEDS_HUMAN, "invoice total does not equal sum of line items")
 
-        # 4. Authority limit.
+        # 5. Authority limit.
         over_limit = inv.total_amount is not None and inv.total_amount > self.cfg.auto_approve_limit
         fire("over_auto_approve_limit", over_limit, Decision.NEEDS_HUMAN,
              f"amount exceeds auto-approval limit of {self.cfg.auto_approve_limit:,.0f} {self.cfg.currency}")

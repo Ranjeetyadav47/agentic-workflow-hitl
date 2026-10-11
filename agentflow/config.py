@@ -10,8 +10,8 @@ from dataclasses import dataclass, field
 class PolicyConfig:
     """Business rules applied by the policy agent. Deterministic by design."""
 
-    auto_approve_limit: float = 250_000.0   # invoices above this always go to a human
-    price_tolerance_pct: float = 2.0        # unit-price variance vs PO tolerated without review
+    auto_approve_limit: float = 150_000.0   # invoices above this always go to a human (1.5 lakh)
+    price_tolerance_pct: float = 1.5        # unit-price variance vs PO tolerated without review
     currency: str = "INR"
 
 
